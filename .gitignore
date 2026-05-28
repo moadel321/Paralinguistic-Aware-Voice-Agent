@@ -5,6 +5,7 @@
 __pycache__
 .idea
 KMS
+/SenseVoice/
 .venv
 .vscode
 *.egg-info

@@ -1,4 +1,5 @@
 import logging
+import os
 import textwrap
 from collections.abc import AsyncIterable
 
@@ -19,6 +20,13 @@ from livekit.agents import (
 )
 from livekit.plugins import ai_coustics, cartesia, deepgram, groq, silero
 
+from paralinguistics.agent_context import append_speech_signal_context
+from paralinguistics.sensevoice_client import SenseVoiceSidecarClient
+from paralinguistics.stt_wrapper import ParalinguisticSTT
+from paralinguistics.style import map_user_emotion_to_cartesia_style
+from paralinguistics.types import VoiceStyle
+from paralinguistics.voice_tags import VoiceTagStreamFilter
+
 logger = logging.getLogger("agent")
 
 # Load .env then .env.local (starter convention); either file works.
@@ -27,40 +35,16 @@ load_dotenv(".env.local")
 
 CARTESIA_VOICE_ID = "9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"
 
-# Placeholder until SenseVoice (or another SER) feeds detected user emotion.
-_USER_EMOTION_KEYWORDS: dict[str, tuple[str, ...]] = {
-    "angry": ("angry", "furious", "mad", "annoyed", "frustrated"),
-    "sad": ("sad", "upset", "depressed", "distressed", "crying"),
-    "excited": ("excited", "thrilled", "amazing", "awesome", "happy"),
-    "calm": ("calm", "relaxed", "peaceful", "fine", "okay"),
-}
-
-
-def detect_user_emotion_placeholder(text: str) -> str:
-    """Keyword stub for user tone; replace with SenseVoice output later."""
-    lowered = text.lower()
-    for emotion, keywords in _USER_EMOTION_KEYWORDS.items():
-        if any(word in lowered for word in keywords):
-            return emotion
-    return "neutral"
-
-
-def map_user_emotion_to_voice_style(user_emotion: str) -> dict[str, str | float]:
-    """Map detected user emotion to Cartesia Sonic 3 delivery style."""
-    styles: dict[str, dict[str, str | float]] = {
-        # De-escalate: stay calm and slightly slower rather than matching anger.
-        "angry": {"emotion": "calm", "speed": 0.9},
-        "calm": {"emotion": "calm", "speed": 1.0},
-        "sad": {"emotion": "calm", "speed": 0.95},
-        "excited": {"emotion": "excited", "speed": 1.05},
-        "neutral": {"emotion": "calm", "speed": 1.0},
-    }
-    return styles.get(user_emotion, styles["neutral"])
-
 
 class Assistant(Agent):
-    def __init__(self, tts: cartesia.TTS) -> None:
+    def __init__(
+        self,
+        *,
+        tts: cartesia.TTS,
+        speech_analyzer: SenseVoiceSidecarClient,
+    ) -> None:
         self._voice_tts = tts
+        self._speech_analyzer = speech_analyzer
         self._user_emotion = "neutral"
         super().__init__(
             llm=groq.LLM(model="openai/gpt-oss-120b"),
@@ -108,20 +92,53 @@ class Assistant(Agent):
     async def on_user_turn_completed(
         self, turn_ctx: ChatContext, new_message: ChatMessage
     ) -> None:
-        text = new_message.text_content or ""
-        self.set_detected_user_emotion(detect_user_emotion_placeholder(text))
-        logger.debug("user emotion (placeholder): %s", self._user_emotion)
+        signal = self._speech_analyzer.latest_signal
+        if signal is not None:
+            self.set_detected_user_emotion(signal.emotion)
+            append_speech_signal_context(turn_ctx, signal)
+            logger.debug("user speech emotion: %s", self._user_emotion)
+        else:
+            self.set_detected_user_emotion("neutral")
 
     async def tts_node(
         self, text: AsyncIterable[str], model_settings: ModelSettings
     ) -> AsyncIterable[rtc.AudioFrame]:
-        style = map_user_emotion_to_voice_style(self._user_emotion)
-        self._voice_tts.update_options(
-            emotion=str(style["emotion"]),
-            speed=float(style["speed"]),
-        )
-        async for frame in Agent.default.tts_node(self, text, model_settings):
+        self._apply_voice_style(map_user_emotion_to_cartesia_style(self._user_emotion))
+        async for frame in Agent.default.tts_node(
+            self,
+            self._strip_voice_tags(text),
+            model_settings,
+        ):
             yield frame
+
+    async def transcription_node(
+        self, text: AsyncIterable[str], model_settings: ModelSettings
+    ) -> AsyncIterable[str]:
+        async for chunk in self._strip_voice_tags(text):
+            yield chunk
+
+    async def _strip_voice_tags(self, text: AsyncIterable[str]) -> AsyncIterable[str]:
+        stream_filter = VoiceTagStreamFilter()
+        applied_tag_style = False
+        async for chunk in text:
+            filtered = stream_filter.push(str(chunk))
+            if stream_filter.style is not None and not applied_tag_style:
+                self._apply_voice_style(stream_filter.style)
+                applied_tag_style = True
+            if filtered:
+                yield filtered
+
+        tail = stream_filter.flush()
+        if stream_filter.style is not None and not applied_tag_style:
+            self._apply_voice_style(stream_filter.style)
+        if tail:
+            yield tail
+
+    def _apply_voice_style(self, style: VoiceStyle) -> None:
+        if style.speed is None:
+            self._voice_tts.update_options(emotion=style.emotion)
+        else:
+            self._voice_tts.update_options(emotion=style.emotion, speed=style.speed)
 
 
 server = AgentServer()
@@ -145,9 +162,16 @@ async def my_agent(ctx: JobContext):
         voice=CARTESIA_VOICE_ID,
         emotion="calm",
     )
+    sensevoice = SenseVoiceSidecarClient(
+        base_url=os.getenv("SENSEVOICE_SIDECAR_URL", "http://127.0.0.1:50000"),
+        timeout_s=float(os.getenv("SENSEVOICE_TIMEOUT_S", "0.2")),
+    )
 
     session = AgentSession(
-        stt=deepgram.STTv2(model="flux-general-en"),
+        stt=ParalinguisticSTT(
+            wrapped_stt=deepgram.STTv2(model="flux-general-en"),
+            analyzer=sensevoice,
+        ),
         tts=tts,
         turn_handling=TurnHandlingOptions(turn_detection="stt"),
         vad=ctx.proc.userdata["vad"],
@@ -155,7 +179,7 @@ async def my_agent(ctx: JobContext):
     )
 
     await session.start(
-        agent=Assistant(tts=tts),
+        agent=Assistant(tts=tts, speech_analyzer=sensevoice),
         room=ctx.room,
         room_options=room_io.RoomOptions(
             audio_input=room_io.AudioInputOptions(
