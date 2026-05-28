@@ -6,10 +6,15 @@ This sidecar exposes SenseVoice speech emotion and event understanding at
 It does not commit model weights. The container downloads `iic/SenseVoiceSmall`
 into the `sensevoice-models` Docker volume the first time it starts.
 
+Important: run this parent-owned sidecar folder, not the ignored upstream
+`SenseVoice/` checkout at the repository root. The root checkout contains a
+different `ser_api.py` that imports its local `model.py`; that path can crash
+on startup with `SinusoidalPositionEncoder` missing PyTorch module internals.
+
 Run it locally:
 
 ```powershell
-cd sidecars/sensevoice
+cd D:\Code\Paralinguistic-Aware-Voice-Agent\sidecars\sensevoice
 docker compose up --build
 ```
 
@@ -19,3 +24,14 @@ Useful environment variables:
 
 - `SENSEVOICE_DEVICE`: `auto`, `cuda:0`, or `cpu`.
 - `SENSEVOICE_MODEL`: defaults to `iic/SenseVoiceSmall`.
+
+If the old root checkout was started by mistake, stop it before starting this
+sidecar:
+
+```powershell
+cd D:\Code\Paralinguistic-Aware-Voice-Agent\SenseVoice
+docker compose down --remove-orphans
+
+cd D:\Code\Paralinguistic-Aware-Voice-Agent\sidecars\sensevoice
+docker compose up --build
+```
