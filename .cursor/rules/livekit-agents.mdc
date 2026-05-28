@@ -1,0 +1,51 @@
+---
+description: LiveKit Agents patterns for voice AI in src/
+globs: src/**/*.py
+alwaysApply: false
+---
+
+# LiveKit Agents — src/
+
+## Before writing code
+
+- Verify API signatures via LiveKit docs MCP (`livekit-docs`) or `lk docs` — never trust model memory for SDK APIs.
+- Keep `agent.py` as the deployment entrypoint; add modules under `src/` as needed.
+
+## Latency-first architecture
+
+- Minimize LLM context: short instructions, only tools needed for the current phase.
+- Prefer handoffs and tasks over one monolithic agent with a long prompt and many tools.
+- Enable streaming and avoid blocking tool calls during active conversation.
+
+## Voice output
+
+Instructions and responses must sound natural when spoken:
+
+```python
+# ✅ GOOD — plain text, brief, one question at a time
+"You can pick Tuesday or Wednesday. Which works better?"
+
+# ❌ BAD — markdown, lists, or structured output
+"Here are your options:\n1. Tuesday\n2. Wednesday"
+```
+
+## Paralinguistic behavior
+
+- User emotion/tone detection belongs in hooks like `on_user_turn_completed`; map to TTS style in `tts_node`.
+- Keep detection logic swappable (placeholder now, SenseVoice or SER later).
+
+## Testing (required for behavior changes)
+
+When changing instructions, tools, handoffs, or tasks:
+
+1. Write tests first in `tests/` describing expected behavior.
+2. Implement until `uv run pytest` passes.
+
+```python
+# Example: test tool invocation before adding the tool
+async def test_agent_calls_lookup_tool():
+    result = await run_agent("What's the weather in NYC?")
+    assert result.tool_calls[0].name == "lookup_weather"
+```
+
+Run: `uv run pytest` · Format: `uv run ruff format` · Lint: `uv run ruff check`
