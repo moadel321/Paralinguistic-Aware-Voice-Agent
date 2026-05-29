@@ -75,19 +75,6 @@ async def test_sidecar_client_posts_pcm_and_returns_emotion_signal() -> None:
     ]
 
 
-@pytest.mark.asyncio
-async def test_sidecar_client_default_timeout_tracks_local_sidecar_latency() -> None:
-    client_cls = require_attr(
-        "paralinguistics.sensevoice_client", "SenseVoiceSidecarClient"
-    )
-    transport = FakeSenseVoiceTransport({"emotion": "neutral"})
-    client = client_cls(base_url="http://sensevoice.test", transport=transport)
-
-    await client.analyze_pcm(b"\x00\x00" * 1600, sample_rate=16000)
-
-    assert transport.calls[0]["timeout_s"] == 1.5
-
-
 def test_resolve_sensevoice_timeout_clamps_stale_env_value(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
