@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import wave
 from typing import Protocol
 
@@ -9,6 +10,9 @@ import aiohttp
 
 from .sensevoice import parse_sensevoice_output
 from .types import BufferedAudio, EmotionSignal
+
+logger = logging.getLogger(__name__)
+DEFAULT_SENSEVOICE_TIMEOUT_S = 1.5
 
 
 class SenseVoiceTransport(Protocol):
@@ -45,7 +49,7 @@ class SenseVoiceSidecarClient:
         self,
         *,
         base_url: str,
-        timeout_s: float = 0.2,
+        timeout_s: float = DEFAULT_SENSEVOICE_TIMEOUT_S,
         transport: SenseVoiceTransport | None = None,
     ) -> None:
         self._base_url = base_url
@@ -58,8 +62,10 @@ class SenseVoiceSidecarClient:
     ) -> EmotionSignal | None:
         if not pcm16:
             self.latest_signal = None
+            logger.debug("sensevoice analysis skipped: empty audio buffer")
             return None
 
+        audio_ms = _audio_duration_ms(pcm16, sample_rate)
         try:
             payload = await asyncio.wait_for(
                 self._transport.post_audio(
@@ -72,13 +78,31 @@ class SenseVoiceSidecarClient:
             )
         except TimeoutError:
             self.latest_signal = None
+            logger.warning(
+                "sensevoice analysis timed out after %.2fs for %sms of audio",
+                self._timeout_s,
+                audio_ms,
+            )
             return None
-        except (aiohttp.ClientError, OSError):
+        except (aiohttp.ClientError, OSError) as exc:
             self.latest_signal = None
+            logger.warning(
+                "sensevoice analysis failed for %sms of audio: %s",
+                audio_ms,
+                exc,
+            )
             return None
 
         signal = parse_sensevoice_output(payload)
         self.latest_signal = signal
+        logger.info(
+            "sensevoice emotion detected: emotion=%s events=%s language=%s audio_ms=%s latency_ms=%s",
+            signal.emotion,
+            ",".join(signal.events) if signal.events else "none",
+            signal.language or "unknown",
+            signal.audio_ms if signal.audio_ms is not None else audio_ms,
+            signal.latency_ms,
+        )
         return signal
 
     async def analyze_buffer(
@@ -90,6 +114,32 @@ class SenseVoiceSidecarClient:
         )
 
 
+def resolve_sensevoice_timeout_s(configured: str | None) -> float:
+    if configured is None or not configured.strip():
+        return DEFAULT_SENSEVOICE_TIMEOUT_S
+
+    try:
+        timeout_s = float(configured)
+    except ValueError:
+        logger.warning(
+            "invalid SENSEVOICE_TIMEOUT_S=%r; using %.2fs",
+            configured,
+            DEFAULT_SENSEVOICE_TIMEOUT_S,
+        )
+        return DEFAULT_SENSEVOICE_TIMEOUT_S
+
+    if timeout_s < DEFAULT_SENSEVOICE_TIMEOUT_S:
+        logger.warning(
+            "SENSEVOICE_TIMEOUT_S=%.2fs is below the supported default %.2fs; using %.2fs",
+            timeout_s,
+            DEFAULT_SENSEVOICE_TIMEOUT_S,
+            DEFAULT_SENSEVOICE_TIMEOUT_S,
+        )
+        return DEFAULT_SENSEVOICE_TIMEOUT_S
+
+    return timeout_s
+
+
 def _wav_bytes(pcm16: bytes, sample_rate: int) -> bytes:
     buffer = io.BytesIO()
     with wave.open(buffer, "wb") as wav:
@@ -98,3 +148,9 @@ def _wav_bytes(pcm16: bytes, sample_rate: int) -> bytes:
         wav.setframerate(sample_rate)
         wav.writeframes(pcm16)
     return buffer.getvalue()
+
+
+def _audio_duration_ms(pcm16: bytes, sample_rate: int) -> int:
+    if sample_rate <= 0:
+        return 0
+    return int((len(pcm16) // 2) * 1000 / sample_rate)

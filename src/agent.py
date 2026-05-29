@@ -21,7 +21,10 @@ from livekit.agents import (
 from livekit.plugins import ai_coustics, cartesia, deepgram, groq, silero
 
 from paralinguistics.agent_context import append_speech_signal_context
-from paralinguistics.sensevoice_client import SenseVoiceSidecarClient
+from paralinguistics.sensevoice_client import (
+    SenseVoiceSidecarClient,
+    resolve_sensevoice_timeout_s,
+)
 from paralinguistics.stt_wrapper import ParalinguisticSTT
 from paralinguistics.style import map_user_emotion_to_cartesia_style
 from paralinguistics.types import VoiceStyle
@@ -99,6 +102,9 @@ class Assistant(Agent):
             logger.debug("user speech emotion: %s", self._user_emotion)
         else:
             self.set_detected_user_emotion("neutral")
+            logger.info(
+                "no sensevoice emotion signal available; using neutral voice style"
+            )
 
     async def tts_node(
         self, text: AsyncIterable[str], model_settings: ModelSettings
@@ -164,7 +170,7 @@ async def my_agent(ctx: JobContext):
     )
     sensevoice = SenseVoiceSidecarClient(
         base_url=os.getenv("SENSEVOICE_SIDECAR_URL", "http://127.0.0.1:50000"),
-        timeout_s=float(os.getenv("SENSEVOICE_TIMEOUT_S", "0.2")),
+        timeout_s=resolve_sensevoice_timeout_s(os.getenv("SENSEVOICE_TIMEOUT_S")),
     )
 
     session = AgentSession(

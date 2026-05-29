@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import re
 import time
@@ -16,6 +17,14 @@ from funasr import AutoModel
 
 TARGET_FS = 16000
 TAG_RE = re.compile(r"<\|[^|]+?\|>")
+logger = logging.getLogger("sensevoice_sidecar")
+log_level = os.getenv("SENSEVOICE_LOG_LEVEL", "INFO").upper()
+logger.setLevel(log_level)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+    logger.addHandler(handler)
+logger.propagate = False
 
 LANGUAGE_TAGS = {
     "<|zh|>": "zh",
@@ -70,10 +79,12 @@ def resolve_device() -> str:
 
 
 model_dir = os.getenv("SENSEVOICE_MODEL", "iic/SenseVoiceSmall")
+device = resolve_device()
+logger.info("loading SenseVoice model=%s device=%s", model_dir, device)
 model = AutoModel(
     model=model_dir,
     trust_remote_code=True,
-    device=resolve_device(),
+    device=device,
 )
 
 app = FastAPI(title="SenseVoice SER sidecar")
@@ -127,19 +138,28 @@ async def analyze_speech_emotion(
 
     latency_ms = int((time.perf_counter() - started) * 1000)
     if len(signals) == 1:
-        return {
+        response = {
             **signals[0],
             "latency_ms": latency_ms,
             "audio_ms": audio_ms,
             "model": model_dir,
         }
+        _log_signal_response(response)
+        return response
 
-    return {
+    response = {
         "result": signals,
         "latency_ms": latency_ms,
         "audio_ms": audio_ms,
         "model": model_dir,
     }
+    logger.info(
+        "sensevoice batch analyzed count=%s audio_ms=%s latency_ms=%s",
+        len(signals),
+        audio_ms,
+        latency_ms,
+    )
+    return response
 
 
 async def _load_audio(file: UploadFile) -> tuple[np.ndarray, int]:
@@ -199,3 +219,16 @@ def _ordered_unique(values: object) -> list[str]:
         seen.add(value)
         ordered.append(value)
     return ordered
+
+
+def _log_signal_response(response: dict[str, Any]) -> None:
+    events = response.get("events") or []
+    logger.info(
+        "sensevoice signal key=%s emotion=%s events=%s language=%s audio_ms=%s latency_ms=%s",
+        response.get("key"),
+        response.get("emotion"),
+        ",".join(events) if events else "none",
+        response.get("language") or "unknown",
+        response.get("audio_ms"),
+        response.get("latency_ms"),
+    )

@@ -24,6 +24,11 @@ Useful environment variables:
 
 - `SENSEVOICE_DEVICE`: `auto`, `cuda:0`, or `cpu`.
 - `SENSEVOICE_MODEL`: defaults to `iic/SenseVoiceSmall`.
+- `SENSEVOICE_TIMEOUT_S`: set on the main agent, defaults to `1.5`. Keep it
+  above the sidecar's observed inference wall time or the agent will drop the
+  response before it can use the detected emotion. Values below `1.5` are
+  clamped to the default by the agent.
+- `SENSEVOICE_LOG_LEVEL`: set on the sidecar, defaults to `INFO`.
 
 If the old root checkout was started by mistake, stop it before starting this
 sidecar:
