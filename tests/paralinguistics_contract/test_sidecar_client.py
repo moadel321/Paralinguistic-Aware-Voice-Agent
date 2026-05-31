@@ -109,6 +109,7 @@ async def test_sidecar_client_logs_detected_emotion(
             "emotion": "happy",
             "events": ["speech"],
             "language": "en",
+            "raw_tags": ["<|en|>", "<|Speech|>", "<|HAPPY|>"],
             "audio_ms": 1200,
             "latency_ms": 540,
         }
@@ -123,6 +124,7 @@ async def test_sidecar_client_logs_detected_emotion(
         await client.analyze_pcm(b"\x00\x00" * 1600, sample_rate=16000)
 
     assert "sensevoice emotion detected: emotion=happy" in caplog.text
+    assert "raw_tags=<|en|>,<|Speech|>,<|HAPPY|>" in caplog.text
     assert "latency_ms=540" in caplog.text
 
 

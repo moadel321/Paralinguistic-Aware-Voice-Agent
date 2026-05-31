@@ -223,12 +223,14 @@ def _ordered_unique(values: object) -> list[str]:
 
 def _log_signal_response(response: dict[str, Any]) -> None:
     events = response.get("events") or []
+    raw_tags = response.get("raw_tags") or []
     logger.info(
-        "sensevoice signal key=%s emotion=%s events=%s language=%s audio_ms=%s latency_ms=%s",
+        "sensevoice signal key=%s emotion=%s events=%s language=%s raw_tags=%s audio_ms=%s latency_ms=%s",
         response.get("key"),
         response.get("emotion"),
         ",".join(events) if events else "none",
         response.get("language") or "unknown",
+        ",".join(raw_tags) if raw_tags else "none",
         response.get("audio_ms"),
         response.get("latency_ms"),
     )

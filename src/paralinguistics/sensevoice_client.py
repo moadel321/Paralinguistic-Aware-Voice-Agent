@@ -96,10 +96,11 @@ class SenseVoiceSidecarClient:
         signal = parse_sensevoice_output(payload)
         self.latest_signal = signal
         logger.info(
-            "sensevoice emotion detected: emotion=%s events=%s language=%s audio_ms=%s latency_ms=%s",
+            "sensevoice emotion detected: emotion=%s events=%s language=%s raw_tags=%s audio_ms=%s latency_ms=%s",
             signal.emotion,
             ",".join(signal.events) if signal.events else "none",
             signal.language or "unknown",
+            ",".join(signal.raw_tags) if signal.raw_tags else "none",
             signal.audio_ms if signal.audio_ms is not None else audio_ms,
             signal.latency_ms,
         )
