@@ -21,6 +21,7 @@ from livekit.agents import (
 from livekit.plugins import ai_coustics, cartesia, deepgram, groq, silero
 
 from paralinguistics.agent_context import append_speech_signal_context
+from paralinguistics.emotion_resolution import resolve_emotion_signal
 from paralinguistics.sensevoice_client import (
     SenseVoiceSidecarClient,
     resolve_sensevoice_timeout_s,
@@ -95,8 +96,18 @@ class Assistant(Agent):
     async def on_user_turn_completed(
         self, turn_ctx: ChatContext, new_message: ChatMessage
     ) -> None:
-        signal = self._speech_analyzer.latest_signal
+        raw_signal = self._speech_analyzer.latest_signal
+        signal = resolve_emotion_signal(
+            raw_signal,
+            transcript=new_message.text_content,
+        )
         if signal is not None:
+            if raw_signal is not None and signal.emotion != raw_signal.emotion:
+                logger.info(
+                    "transcript emotion override: sensevoice=%s resolved=%s",
+                    raw_signal.emotion,
+                    signal.emotion,
+                )
             self.set_detected_user_emotion(signal.emotion)
             append_speech_signal_context(turn_ctx, signal)
             logger.debug("user speech emotion: %s", self._user_emotion)
@@ -172,16 +183,21 @@ async def my_agent(ctx: JobContext):
         base_url=os.getenv("SENSEVOICE_SIDECAR_URL", "http://127.0.0.1:50000"),
         timeout_s=resolve_sensevoice_timeout_s(os.getenv("SENSEVOICE_TIMEOUT_S")),
     )
+    vad_model = ctx.proc.userdata["vad"]
 
     session = AgentSession(
         stt=ParalinguisticSTT(
             wrapped_stt=deepgram.STTv2(model="flux-general-en"),
             analyzer=sensevoice,
+            vad=vad_model,
         ),
         tts=tts,
-        turn_handling=TurnHandlingOptions(turn_detection="stt"),
-        vad=ctx.proc.userdata["vad"],
-        preemptive_generation=True,
+        turn_handling=TurnHandlingOptions(
+            turn_detection="stt",
+            interruption={"mode": "vad"},
+            preemptive_generation={"enabled": True},
+        ),
+        vad=vad_model,
     )
 
     await session.start(
